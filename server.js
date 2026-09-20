@@ -3,14 +3,10 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocketServer({ port: PORT });
 
-let storedData = {
-    highScore: 0
-};
+let storedData = { highScore: 0 };
 
-// Broadcast user list updates to a room
 function broadcastRoomUpdate(roomCode) {
     if (!roomCode) return;
-    
     let usernames = [];
     wss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN && client.room === roomCode) {
@@ -35,9 +31,14 @@ console.log(`WebSocket server is running on port ${PORT}`);
 
 wss.on('connection', (ws) => {
     console.log('A new player connected!');
-
     ws.room = null;
     ws.username = 'Anonymous';
+    ws.isAlive = true;
+
+    // Respond to keepalive pings
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
 
     ws.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
 
@@ -45,19 +46,14 @@ wss.on('connection', (ws) => {
         try {
             const message = JSON.parse(messageString);
 
-            // Handle room joining
             if (message.type === 'join') {
                 ws.room = message.room;
                 ws.username = message.username || 'Anonymous';
                 console.log(`User ${ws.username} joined room ID: ${ws.room}`);
                 broadcastRoomUpdate(ws.room);
-            }
-
-            // Handle Multiplayer Platformer State (X, Y, Costume, Direction)
+            } 
             else if (message.type === 'player_state') {
                 const targetRoom = message.room || ws.room;
-                
-                // Broadcast to ALL OTHER players in the same room
                 wss.clients.forEach((client) => {
                     if (client.readyState === WebSocket.OPEN && client.room === targetRoom && client !== ws) {
                         client.send(JSON.stringify({
@@ -70,9 +66,7 @@ wss.on('connection', (ws) => {
                         }));
                     }
                 });
-            }
-
-            // Handle standard chat messages
+            } 
             else if (message.type === 'chat') {
                 const targetRoom = message.room || ws.room;
                 wss.clients.forEach((client) => {
@@ -85,18 +79,6 @@ wss.on('connection', (ws) => {
                     }
                 });
             }
-
-            // High score tracking
-            else if (message.type === 'SET_SCORE') {
-                if (message.value > storedData.highScore) {
-                    storedData.highScore = message.value;
-                    wss.clients.forEach((client) => {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
-                        }
-                    });
-                }
-            }
         } catch (e) {
             console.log('Received non-JSON message:', messageString);
         }
@@ -104,8 +86,19 @@ wss.on('connection', (ws) => {
 
     ws.on('close', () => {
         console.log('A player disconnected.');
-        if (ws.room) {
-            broadcastRoomUpdate(ws.room);
-        }
+        if (ws.room) broadcastRoomUpdate(ws.room);
     });
+});
+
+// Periodic heartbeat sweep to keep connections from dropping due to inactivity
+const interval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    }, 30000);
+});
+
+wss.on('close', () => {
+    clearInterval(interval);
 });
