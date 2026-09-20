@@ -3,12 +3,11 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocketServer({ port: PORT });
 
-// Store your game data on the server
 let storedData = {
     highScore: 0
 };
 
-// Helper function to calculate and broadcast user count/names to a specific room
+// Broadcast user list updates to a room
 function broadcastRoomUpdate(roomCode) {
     if (!roomCode) return;
     
@@ -37,48 +36,60 @@ console.log(`WebSocket server is running on port ${PORT}`);
 wss.on('connection', (ws) => {
     console.log('A new player connected!');
 
-    // Track individual room and username for this connection
     ws.room = null;
     ws.username = 'Anonymous';
 
-    // Send the current stored data to the player who just joined
     ws.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
 
-    // Listen for messages from players
     ws.on('message', (messageString) => {
         try {
             const message = JSON.parse(messageString);
 
             // Handle room joining
             if (message.type === 'join') {
-                ws.room = message.room; // Room ID
+                ws.room = message.room;
                 ws.username = message.username || 'Anonymous';
                 console.log(`User ${ws.username} joined room ID: ${ws.room}`);
                 broadcastRoomUpdate(ws.room);
             }
 
-            // Handle chat messages and action data broadcasting within the same room
-            else if (message.type === 'message' || message.type === 'chat') {
+            // Handle Multiplayer Platformer State (X, Y, Costume, Direction)
+            else if (message.type === 'player_state') {
                 const targetRoom = message.room || ws.room;
                 
+                // Broadcast to ALL OTHER players in the same room
                 wss.clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN && client.room === targetRoom) {
+                    if (client.readyState === WebSocket.OPEN && client.room === targetRoom && client !== ws) {
                         client.send(JSON.stringify({
-                            type: message.type,
+                            type: 'player_state',
                             username: ws.username,
-                            message: message.message,
-                            data: message.data
+                            x: message.x,
+                            y: message.y,
+                            costume: message.costume,
+                            direction: message.direction
                         }));
                     }
                 });
             }
 
-            // If a player updates the high score
+            // Handle standard chat messages
+            else if (message.type === 'chat') {
+                const targetRoom = message.room || ws.room;
+                wss.clients.forEach((client) => {
+                    if (client.readyState === WebSocket.OPEN && client.room === targetRoom) {
+                        client.send(JSON.stringify({
+                            type: 'chat',
+                            username: ws.username,
+                            message: message.message
+                        }));
+                    }
+                });
+            }
+
+            // High score tracking
             else if (message.type === 'SET_SCORE') {
                 if (message.value > storedData.highScore) {
                     storedData.highScore = message.value;
-                    
-                    // Broadcast the new high score to EVERYONE connected
                     wss.clients.forEach((client) => {
                         if (client.readyState === WebSocket.OPEN) {
                             client.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
