@@ -1,12 +1,12 @@
 const { WebSocketServer } = require('ws');
 
-const PORT = process.env.PORT || 8080;[cite: 1]
-const wss = new WebSocketServer({ port: PORT });[cite: 1]
+const PORT = process.env.PORT || 8080;
+const wss = new WebSocketServer({ port: PORT });
 
 // Store your game data on the server
 let storedData = {
     highScore: 0
-};[cite: 1]
+};
 
 // Helper function to calculate and broadcast user count/names to a specific room
 function broadcastRoomUpdate(roomCode) {
@@ -32,17 +32,17 @@ function broadcastRoomUpdate(roomCode) {
     });
 }
 
-console.log(`WebSocket server is running on port ${PORT}`);[cite: 1]
+console.log(`WebSocket server is running on port ${PORT}`);
 
 wss.on('connection', (ws) => {
-    console.log('A new player connected!');[cite: 1]
+    console.log('A new player connected!');
 
     // Track individual room and username for this connection
     ws.room = null;
     ws.username = 'Anonymous';
 
     // Send the current stored data to the player who just joined
-    ws.send(JSON.stringify({ type: 'UPDATE', data: storedData }));[cite: 1]
+    ws.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
 
     // Listen for messages from players
     ws.on('message', (messageString) => {
@@ -81,18 +81,18 @@ wss.on('connection', (ws) => {
                     // Broadcast the new high score to EVERYONE connected
                     wss.clients.forEach((client) => {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ type: 'UPDATE', data: storedData }));[cite: 1]
+                            client.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
                         }
                     });
                 }
             }
         } catch (e) {
-            console.log('Received non-JSON message:', messageString);[cite: 1]
+            console.log('Received non-JSON message:', messageString);
         }
     });
 
     ws.on('close', () => {
-        console.log('A player disconnected.');[cite: 1]
+        console.log('A player disconnected.');
         if (ws.room) {
             broadcastRoomUpdate(ws.room);
         }
