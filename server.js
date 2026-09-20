@@ -1,104 +1,76 @@
-const { WebSocketServer } = require('ws');
-
+const WebSocket = require('ws');
 const PORT = process.env.PORT || 8080;
-const wss = new WebSocketServer({ port: PORT });
+const server = new WebSocket.Server({ port: PORT });
 
-let storedData = { highScore: 0 };
+// Room layout storage: { roomId: { password: 'xyz', clients: [{ws, username}] } }
+const rooms = {};
 
-function broadcastRoomUpdate(roomCode) {
-    if (!roomCode) return;
-    let usernames = [];
-    wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN && client.room === roomCode) {
-            usernames.push(client.username || 'Anonymous');
-        }
-    });
+server.on('connection', (ws) => {
+    let currentRoom = null;
+    let username = "Anonymous";
 
-    const updatePacket = JSON.stringify({
-        type: 'room_update',
-        count: usernames.length,
-        usernames: usernames
-    });
-
-    wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN && client.room === roomCode) {
-            client.send(updatePacket);
-        }
-    });
-}
-
-console.log(`WebSocket server is running on port ${PORT}`);
-
-wss.on('connection', (ws) => {
-    console.log('A new player connected!');
-    ws.room = null;
-    ws.username = 'Anonymous';
-    ws.isAlive = true;
-
-    // Respond to keepalive pings
-    ws.on('pong', () => {
-        ws.isAlive = true;
-    });
-
-    ws.send(JSON.stringify({ type: 'UPDATE', data: storedData }));
-
-    ws.on('message', (messageString) => {
+    ws.on('message', (message) => {
+        let data;
         try {
-            const message = JSON.parse(messageString);
-
-            if (message.type === 'join') {
-                ws.room = message.room;
-                ws.username = message.username || 'Anonymous';
-                console.log(`User ${ws.username} joined room ID: ${ws.room}`);
-                broadcastRoomUpdate(ws.room);
-            } 
-            else if (message.type === 'player_state') {
-                const targetRoom = message.room || ws.room;
-                wss.clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN && client.room === targetRoom && client !== ws) {
-                        client.send(JSON.stringify({
-                            type: 'player_state',
-                            username: ws.username,
-                            x: message.x,
-                            y: message.y,
-                            costume: message.costume,
-                            direction: message.direction
-                        }));
-                    }
-                });
-            } 
-            else if (message.type === 'chat') {
-                const targetRoom = message.room || ws.room;
-                wss.clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN && client.room === targetRoom) {
-                        client.send(JSON.stringify({
-                            type: 'chat',
-                            username: ws.username,
-                            message: message.message
-                        }));
-                    }
-                });
-            }
+            data = JSON.parse(message);
         } catch (e) {
-            console.log('Received non-JSON message:', messageString);
+            return;
+        }
+
+        if (data.action === 'join') {
+            const { room, password, username: user } = data;
+            username = user || "Anonymous";
+
+            if (!rooms[room]) {
+                rooms[room] = { password: password, clients: [] };
+            }
+
+            if (rooms[room].password !== password) {
+                ws.send(JSON.stringify({ action: 'error', message: 'Incorrect password' }));
+                ws.close();
+                return;
+            }
+
+            currentRoom = room;
+            rooms[room].clients.push({ ws, username });
+
+            broadcastToRoom(currentRoom, ws, {
+                action: 'player_join',
+                username: username
+            });
+        } 
+        else if (['update', 'chat'].includes(data.action)) {
+            if (!currentRoom || !rooms[currentRoom]) return;
+            data.username = username;
+            broadcastToRoom(currentRoom, ws, data);
         }
     });
 
     ws.on('close', () => {
-        console.log('A player disconnected.');
-        if (ws.room) broadcastRoomUpdate(ws.room);
+        if (currentRoom && rooms[currentRoom]) {
+            rooms[currentRoom].clients = rooms[currentRoom].clients.filter(client => client.ws !== ws);
+            
+            broadcastToRoom(currentRoom, ws, {
+                action: 'player_leave',
+                username: username
+            });
+
+            if (rooms[currentRoom].clients.length === 0) {
+                delete rooms[currentRoom];
+            }
+        }
     });
 });
 
-// Periodic heartbeat sweep to keep connections from dropping due to inactivity
-const interval = setInterval(() => {
-    wss.clients.forEach((ws) => {
-        if (ws.isAlive === false) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
-    }, 30000);
-});
+function broadcastToRoom(roomName, senderWs, dataObject) {
+    const room = rooms[roomName];
+    if (!room) return;
+    const stringified = JSON.stringify(dataObject);
+    room.clients.forEach(client => {
+        if (client.ws !== senderWs && client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(stringified);
+        }
+    });
+}
 
-wss.on('close', () => {
-    clearInterval(interval);
-});
+console.log(`Multiplayer WebSocket server running on port ${PORT}`);
